@@ -3,9 +3,10 @@ import numpy
 import torch
 import pytorch_lightning as pl
 from torchvision.datasets import CIFAR10
+from torch.utils.data import ConcatDataset
 
 
-class SmallCIFAR10(CIFAR10):
+class SubsetCIFAR10(CIFAR10):
     def __init__(self, root, indices, **kwargs):
         super().__init__(root, **kwargs)
         assert len(indices) < len(self)
@@ -15,23 +16,22 @@ class SmallCIFAR10(CIFAR10):
 
 def index_select(labels, n, seed=None):
     labels = numpy.array(labels)
-    classes = labels.unique()
+    classes = numpy.unique(labels)
     n_per_class = n // len(classes)
     random_state = numpy.random.RandomState(seed)
 
-    indices = []
+    labeled_indices = []
     for c in classes:
-        indices.extend(random_state.choice(
-            numpy.where(labels == c)[0],
-            size=n_per_class,
-            replace=False))
-    return indices
+        class_indices = numpy.where(labels == c)[0]
+        chosen_indices = random_state.choice(class_indices, size=n_per_class, replace=False)
+        labeled_indices.extend(chosen_indices)
+    return labeled_indices
 
 
 class SemiCIFAR10(pl.LightningDataModule):
 
-    def __init__(self, root, num_labeled=4000, batch_size=1,
-                 num_workers=None, pin_memory=True, seed=None, expend=True):
+    def __init__(self, root, num_labeled=4000, batch_size=1, seed=None,
+                 num_workers=None, pin_memory=True, expand_labeled=True):
         super().__init__()
         self.root = root
         self.num_labeled = num_labeled
@@ -49,10 +49,10 @@ class SemiCIFAR10(pl.LightningDataModule):
         self.train_transformᵤ = None
         self.valid_transform = None
 
+        self.seed = None
         self.num_workers = num_workers if num_workers else os.cpu_count()
         self.pin_memory = pin_memory
-        self.seed = None
-        self.expand = expand
+        self.expand_labeled = expand_labeled
 
     def prepare_data(self):
         CIFAR10(self.root, train=True, download=True)
@@ -62,13 +62,13 @@ class SemiCIFAR10(pl.LightningDataModule):
         self.cifar10_valid = CIFAR10(self.root, train=False, transform=self.valid_transform)
         self.cifar10_trainᵤ = CIFAR10(self.root, train=True, transform=self.train_transformᵤ)
 
-        indices = index_select(self.cifar10_train.targets, self.num_labeled, self.seed)
-        self.cifar10_trainₗ = SmallCIFAR10(self.root, indices, train=True, transform=self.train_transformₗ)
+        indices = index_select(self.cifar10_trainᵤ.targets, self.num_labeled, self.seed)
+        self.cifar10_trainₗ = SubsetCIFAR10(self.root, indices, train=True, transform=self.train_transformₗ)
 
-        if self.expand:
-            n_iter = 1 + (len(self.cifar10_trainᵤ) - 1) // self.batch_sizeᵤ
-            indices = indices * (n_iter * self.batch_sizeₗ // len(indices))
-
+        if self.expand_labeled:
+            n = 1 + (len(self.cifar10_trainᵤ) - 1) // self.batch_sizeᵤ
+            m = n * self.batch_sizeₗ // len(indices)
+            self.cifar10_trainₗ = ConcatDataset([self.cifar10_trainₗ] * m)
 
     def train_dataloader(self):
         loaderₗ = torch.utils.data.DataLoader(
@@ -90,30 +90,31 @@ class SemiCIFAR10(pl.LightningDataModule):
 
 
 if __name__ == "__main__":
-    from torchvision import transforms
-    trfm = transforms.ToTensor()
-    dm = SSL_CIFAR10(**{
+    dm = SemiCIFAR10(**{
         "root": "data/cifar10",
+        # "num_labeled": 10,
+        # "num_labeled": 40,
+        # "num_labeled": 250,
+        # "num_labeled": 1000,
         "num_labeled": 4000,
         "batch_size": {
             "labeled": 64,
             "unlabeled": 448
         }
     })
-    dm.train_transformₗ = trfm
-    dm.train_transformᵤ = trfm
-    dm.valid_transform = trfm
+
+    from torchvision import transforms
+    transform = transforms.ToTensor()
+    dm.train_transformₗ = transform
+    dm.train_transformᵤ = transform
+    dm.valid_transform = transform
+
     dm.prepare_data()
     dm.setup()
-    print("labeled dataset:", len(dm.cifar10_trainₗ))
-    print("unlabeled dataset:", len(dm.cifar10_trainᵤ))
-    print("test dataset:", len(dm.cifar10_test))
-    print("labeled loader:", len(dm.train_dataloader()['labeled']))
-    print("unlabeled loader:", len(dm.train_dataloader()['unlabeled']))
-    print("test loader:", len(dm.val_dataloader()))
-    #for x in zip(*dm.train_dataloader()):
-    #    print(x)
-    #for x in dm.val_dataloader():
-    #    print(x)
-    #l, u = dm.train_dataloader()
-    #print(len(l), len(u))
+
+    print("dataset train-labeled:", len(dm.cifar10_trainₗ))
+    print("dataset train-unlabeled:", len(dm.cifar10_trainᵤ))
+    print("dataset valid:", len(dm.cifar10_valid))
+    print("loader train-labeled:", len(dm.train_dataloader()['labeled']))
+    print("loader train-unlabeled:", len(dm.train_dataloader()['unlabeled']))
+    print("loader valid:", len(dm.val_dataloader()))
