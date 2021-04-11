@@ -14,11 +14,10 @@ class SubsetCIFAR10(CIFAR10):
         self.targets = torch.tensor(self.targets)[indices]
 
 
-def index_select(labels, n, seed=None):
+def index_select(labels, n, random_state):
     labels = numpy.array(labels)
     classes = numpy.unique(labels)
     n_per_class = n // len(classes)
-    random_state = numpy.random.RandomState(seed)
 
     labeled_indices = []
     for c in classes:
@@ -49,7 +48,7 @@ class SemiCIFAR10(pl.LightningDataModule):
         self.train_transformᵤ = None
         self.valid_transform = None
 
-        self.seed = None
+        self.random_state = numpy.random.RandomState(seed)
         self.num_workers = num_workers if num_workers else os.cpu_count()
         self.pin_memory = pin_memory
         self.expand_labeled = expand_labeled
@@ -62,7 +61,7 @@ class SemiCIFAR10(pl.LightningDataModule):
         self.cifar10_valid = CIFAR10(self.root, train=False, transform=self.valid_transform)
         self.cifar10_trainᵤ = CIFAR10(self.root, train=True, transform=self.train_transformᵤ)
 
-        indices = index_select(self.cifar10_trainᵤ.targets, self.num_labeled, self.seed)
+        indices = index_select(self.cifar10_trainᵤ.targets, self.num_labeled, self.random_state)
         self.cifar10_trainₗ = SubsetCIFAR10(self.root, indices, train=True, transform=self.train_transformₗ)
 
         if self.expand_labeled:
